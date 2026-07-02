@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Claude Assist</string>
+    <string name="accessibility_service_label">Claude Assist automation</string>
+    <string name="accessibility_service_description">Lets Claude Assist read the screen, take screenshots, and operate the Claude app on your behalf when you ask a question from the overlay bubble. Nothing is captured or automated except while an ask you started is running.</string>
+    <string name="overlay_notification_channel">Assistant overlay</string>
+    <string name="overlay_notification_title">Claude Assist is running</string>
+    <string name="overlay_notification_text">Tap the bubble to ask about your screen</string>
+</resources>
