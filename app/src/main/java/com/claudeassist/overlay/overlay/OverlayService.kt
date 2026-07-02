@@ -3,6 +3,7 @@ package com.claudeassist.overlay.overlay
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -35,7 +36,11 @@ class OverlayService : Service() {
     private lateinit var controller: OverlayWindowController
     private lateinit var app: App
     private var askJob: Job? = null
-    private var pendingImage: Bitmap? = null
+
+    // Persistent chat session (survives closing/reopening the panel).
+    private val messages = mutableListOf<ChatMessage>()
+    private var sessionImage: Bitmap? = null
+    private var sessionActive = false
 
     override fun onCreate() {
         super.onCreate()
@@ -45,8 +50,12 @@ class OverlayService : Service() {
             context = this,
             onBubbleTap = ::onBubbleTap,
             onSend = ::onSend,
-            onPanelClosed = { pendingImage = null },
-            onRetry = ::onRetry,
+            onPanelClosed = { controller.hideMenu() },
+            onNewChat = ::onNewChat,
+            onMore = ::onMore,
+            onOpenInClaude = {
+                com.claudeassist.overlay.notifications.ClaudeNotificationListener.openLatest(this)
+            },
         )
         controller.addBubble()
     }
@@ -55,54 +64,106 @@ class OverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * The task was swiped from recents. On aggressive OEMs the process gets
+     * killed anyway; schedule a near-immediate restart via an exact alarm so the
+     * bubble comes back with a minimal gap rather than waiting on START_STICKY.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val restart = Intent(applicationContext, RestartReceiver::class.java)
+            .apply { action = RestartReceiver.ACTION_RESTART }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pi = PendingIntent.getBroadcast(this, 42, restart, flags)
+        val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        runCatching {
+            am.setExactAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + 1000,
+                pi,
+            )
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
+    /** Bubble tap toggles the chat. Opening resumes the existing conversation;
+     *  a screenshot is captured only when starting a fresh session. */
     private fun onBubbleTap() {
-        val panel = controller.showPanel()
-        // Grab a screenshot for this ask if enabled and the service is live.
-        if (app.settings.attachScreenshot) {
-            scope.launch {
-                val bmp = captureScreenshot()
-                pendingImage = bmp
-                panel.setThumbnail(bmp)
+        if (controller.isPanelOpen()) {
+            controller.hidePanel()
+            return
+        }
+        scope.launch {
+            if (!sessionActive) {
+                sessionImage = if (app.settings.attachScreenshot) captureScreenshot() else null
+                sessionActive = true
             }
+            val panel = controller.showPanel()
+            panel.render(messages, typing = askJob?.isActive == true)
+            panel.focusInput()
+        }
+    }
+
+    /** Header "more" opens the action menu (Open Claude / circle / voice). */
+    private fun onMore() {
+        controller.toggleMenu(
+            listOf(
+                MenuItem("💬", "Open Claude") {
+                    controller.hideMenu()
+                    com.claudeassist.overlay.notifications.ClaudeNotificationListener.openLatest(this)
+                },
+                MenuItem("◯", "Circle search", enabled = false) {},
+                MenuItem("🎤", "Voice dictation", enabled = false) {},
+            ),
+        )
+    }
+
+    /** Header "new chat": clear the conversation and grab a fresh screenshot. */
+    private fun onNewChat() {
+        askJob?.cancel()
+        messages.clear()
+        sessionActive = false
+        sessionImage = null
+        controller.panel()?.render(messages, typing = false)
+        scope.launch {
+            if (app.settings.attachScreenshot) sessionImage = captureScreenshot()
+            sessionActive = true
         }
     }
 
     private fun onSend(prompt: String) {
         val brain: Brain = app.brains.active.value
-        val panel = controller.panel() ?: return
-        panel.showSending()
-        controller.showBanner("Asking ${brain.displayName}… don't touch the screen")
+        val firstUserMessage = messages.none { it.role == ChatMessage.Role.USER }
+        // Attach the session screenshot to the first message only; follow-ups are
+        // text within the same Claude conversation.
+        val thumb = if (firstUserMessage) sessionImage else null
+        messages.add(ChatMessage(ChatMessage.Role.USER, prompt, thumb = thumb))
+        controller.panel()?.clearInput()
+        controller.panel()?.render(messages, typing = true)
 
+        val imageForAsk = if (firstUserMessage) sessionImage else null
         askJob?.cancel()
         askJob = scope.launch {
-            var full = ""
-            try {
-                brain.ask(pendingImage, prompt).collect { event ->
-                    when (event) {
-                        is BrainEvent.Delta -> {
-                            full = event.textSoFar
-                            panel.showAnswer(event.textSoFar)
-                        }
-                        is BrainEvent.Done -> {
-                            full = event.fullText
-                            panel.showDone(event.fullText, event.timedOut)
-                            saveHistory(prompt, event.fullText, brain.id)
-                        }
-                        is BrainEvent.Failure -> {
-                            panel.showError(event.reason, event.recoverable)
-                        }
+            brain.ask(imageForAsk, prompt).collect { event ->
+                when (event) {
+                    is BrainEvent.Delta -> Unit // keep the typing indicator; no status spam
+                    is BrainEvent.Done -> {
+                        messages.add(
+                            ChatMessage(
+                                ChatMessage.Role.CLAUDE,
+                                event.fullText,
+                                truncated = event.timedOut,
+                            ),
+                        )
+                        controller.panel()?.render(messages, typing = false)
+                        saveHistory(prompt, event.fullText, brain.id)
+                    }
+                    is BrainEvent.Failure -> {
+                        messages.add(ChatMessage(ChatMessage.Role.CLAUDE, event.reason, error = true))
+                        controller.panel()?.render(messages, typing = false)
                     }
                 }
-            } finally {
-                controller.hideBanner()
             }
         }
-    }
-
-    private fun onRetry() {
-        val panel = controller.panel() ?: return
-        val prompt = panel.currentPrompt()
-        if (prompt.isNotEmpty()) onSend(prompt)
     }
 
     private suspend fun captureScreenshot(): Bitmap? {

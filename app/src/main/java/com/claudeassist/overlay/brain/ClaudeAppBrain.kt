@@ -1,34 +1,34 @@
 package com.claudeassist.overlay.brain
 
 import android.graphics.Bitmap
-import com.claudeassist.overlay.automation.AssistAccessibilityService
 import com.claudeassist.overlay.brain.drivers.ClaudeAppDriver
 import com.claudeassist.overlay.brain.drivers.DriverException
 import com.claudeassist.overlay.core.brain.BrainEvent
 import com.claudeassist.overlay.core.brain.BrainStatus
-import com.claudeassist.overlay.core.driver.AnswerTracker
-import com.claudeassist.overlay.core.driver.RunLog
 import com.claudeassist.overlay.core.driver.RunLogBuilder
 import com.claudeassist.overlay.core.driver.StepOutcome
+import com.claudeassist.overlay.notifications.ClaudeNotificationListener
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Brain that answers by driving the installed Claude app via [ClaudeAppDriver].
  *
- * Responsibilities layered on top of the driver:
- *  - one ask at a time (Busy);
- *  - AnswerTracker for stability/timeout over the driver's raw samples;
- *  - a foreground watchdog that aborts if the user leaves the Claude app
- *    mid-run (they touched the screen);
- *  - return to the user's previous app;
- *  - a RunLog handed to [onRun] for telemetry.
+ * Flow: submit the ask (screenshot + prompt) in the Claude app, immediately
+ * return the user to their previous app, then read the answer from Claude's
+ * "responded" notification — so the user can switch apps freely and the answer
+ * still lands in the overlay. Long answers arrive truncated in the notification
+ * (a platform limit); [BrainEvent.Done.timedOut] flags that so the UI can offer
+ * "Open in Claude" for the full text.
  */
 class ClaudeAppBrain(
     private val driver: ClaudeAppDriver,
-    private val onRun: suspend (RunLog) -> Unit = {},
+    private val onRun: suspend (com.claudeassist.overlay.core.driver.RunLog) -> Unit = {},
+    private val notificationAccessEnabled: () -> Boolean = { true },
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) : Brain {
 
@@ -54,46 +54,42 @@ class ClaudeAppBrain(
             emit(BrainEvent.Failure("Another ask is already running.", recoverable = true))
             return@flow
         }
+        if (!notificationAccessEnabled()) {
+            emit(
+                BrainEvent.Failure(
+                    "Grant Notification access so Claude's reply can come back to the overlay " +
+                        "(Setup ▸ step 4).",
+                    recoverable = false,
+                ),
+            )
+            return@flow
+        }
         _status.value = BrainStatus.Busy
 
         val log = RunLogBuilder(brainId = id, startedAtMs = nowMs())
-        val tracker = AnswerTracker()
-        var finalText = ""
         var failure: String? = null
-        val startPackage = AssistAccessibilityService.foregroundPackage.value
+        val startMs = nowMs()
 
         try {
-            var done = false
-            driver.run(image, prompt).collect { sample ->
-                if (done) return@collect
+            driver.submitAsk(image, prompt)
+            log.step("submit", StepOutcome.OK, 0, "sent")
 
-                // Watchdog: if the user navigates away from the Claude app to
-                // something other than where they started, abort cleanly.
-                val fg = AssistAccessibilityService.foregroundPackage.value
-                if (fg.isNotEmpty() &&
-                    fg != com.claudeassist.overlay.core.driver.ClaudeAppSelectors.PACKAGE &&
-                    fg != startPackage
-                ) {
-                    throw DriverException("You switched apps mid-ask.", recoverable = true)
-                }
+            // Background Claude so it posts the completion notification, and put
+            // the user back where they were.
+            driver.returnToPreviousApp()
+            emit(BrainEvent.Delta("Sent. You can switch apps — waiting for Claude's reply…"))
 
-                when (val state = tracker.onSample(sample.text, nowMs())) {
-                    is AnswerTracker.State.Streaming -> {
-                        if (state.changed) emit(BrainEvent.Delta(state.textSoFar))
-                    }
-                    is AnswerTracker.State.Finished -> {
-                        finalText = state.fullText
-                        done = true
-                        log.step("answer", StepOutcome.OK, 0, if (state.timedOut) "timed-out" else "stable")
-                        emit(BrainEvent.Done(state.fullText, timedOut = state.timedOut))
-                    }
-                }
+            val reply = withTimeoutOrNull(ANSWER_TIMEOUT_MS) {
+                ClaudeNotificationListener.replies.first { it.postedAtMs >= startMs }
             }
-            if (!done) {
-                // Driver flow ended without a finish (shouldn't normally happen).
-                finalText = ""
-                failure = "Claude app closed before answering."
+            if (reply == null) {
+                failure = "No reply from Claude within ${ANSWER_TIMEOUT_MS / 1000}s. " +
+                    "Open Claude to check."
                 emit(BrainEvent.Failure(failure, recoverable = true))
+            } else {
+                val truncated = looksTruncated(reply.text)
+                log.step("answer", StepOutcome.OK, 0, if (truncated) "truncated" else "full")
+                emit(BrainEvent.Done(reply.text, timedOut = truncated))
             }
         } catch (e: DriverException) {
             failure = e.reason
@@ -104,9 +100,19 @@ class ClaudeAppBrain(
             log.step("driver", StepOutcome.FAILED, 0, failure!!)
             emit(BrainEvent.Failure(failure!!, recoverable = true))
         } finally {
-            driver.returnToPreviousApp()
             _status.value = if (failure == null) BrainStatus.Ready else BrainStatus.Broken(failure!!)
             onRun(log.build(nowMs(), success = failure == null, failureReason = failure))
         }
+    }
+
+    /** The Claude app truncates long notification bodies; treat an answer that
+     *  doesn't end on sentence/code punctuation as likely cut off. */
+    private fun looksTruncated(text: String): Boolean {
+        val last = text.trimEnd().lastOrNull() ?: return false
+        return last !in ".!?\"')]}`…"
+    }
+
+    companion object {
+        private const val ANSWER_TIMEOUT_MS = 120_000L
     }
 }

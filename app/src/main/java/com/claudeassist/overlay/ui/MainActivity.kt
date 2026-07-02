@@ -8,11 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,7 +45,11 @@ private fun RootScreen(app: App) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Scaffold(
         topBar = {
-            TabRow(selectedTabIndex = tab) {
+            ScrollableTabRow(
+                selectedTabIndex = tab,
+                edgePadding = 8.dp,
+                modifier = Modifier.statusBarsPadding(),
+            ) {
                 TABS.forEachIndexed { i, title ->
                     Tab(selected = tab == i, onClick = { tab = i }, text = { Text(title) })
                 }

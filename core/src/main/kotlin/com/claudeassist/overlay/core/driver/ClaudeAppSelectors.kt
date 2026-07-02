@@ -22,13 +22,27 @@ import com.claudeassist.overlay.core.uitree.or
 object ClaudeAppSelectors {
     const val PACKAGE = "com.anthropic.claude"
 
-    /** The message input field on the chat screen. */
-    val inputField: NodeMatcher = Matchers.editable and Matchers.visible
+    /**
+     * The message input field on the chat screen.
+     *
+     * The Claude app is Compose-based: the field reports as an `EditText`
+     * class but does NOT set the accessibility `isEditable` flag, so matching on
+     * `editable` alone misses it. Match on the class name, keeping `editable` as
+     * a fallback for other builds/apps.
+     */
+    val inputField: NodeMatcher =
+        (Matchers.classNameContains("EditText") or Matchers.editable) and Matchers.visible
 
-    /** The send button next to the input field. */
-    val sendButton: NodeMatcher = Matchers.clickable and (
-        Matchers.descContains("send") or Matchers.textEquals("send")
-    )
+    /**
+     * The send button next to the input field. Only appears once the field is
+     * non-empty. In the current Claude app it is a node with content-desc
+     * "Send" whose clickable ancestor carries no description — so we match the
+     * described node and rely on ActionExecutor's coordinate-tap fallback
+     * (the direct-click path requires `isClickable`, the coordinate path does
+     * not). Do NOT require `clickable` here.
+     */
+    val sendButton: NodeMatcher =
+        Matchers.descEquals("send") or Matchers.descContains("send") or Matchers.textEquals("send")
 
     /** The new-chat affordance (used by the M2 debug demo). */
     val newChatButton: NodeMatcher = Matchers.clickable and (

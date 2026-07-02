@@ -1,30 +1,34 @@
 package com.claudeassist.overlay.overlay
 
 import android.content.Context
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Owns the WindowManager windows: the always-present bubble and the on-demand
- * ask panel + session banner.
+ * Owns the WindowManager windows: the always-on bubble, the chat panel, a
+ * transparent scrim behind the panel (tap-outside-to-close), and the session
+ * banner.
  *
- * IME protocol: the bubble is FLAG_NOT_FOCUSABLE (never steals touches from the
- * app below). The panel must be focusable for its EditText to receive the
- * keyboard, so it is added focusable; a Back key press on the focused panel
- * closes it (there is no Activity to consume Back otherwise).
+ * Layout intent: the chat is anchored to the bubble and follows it when dragged;
+ * the bubble is always raised above the chat; tapping outside the chat closes it
+ * (state is kept, so reopening resumes).
  */
 class OverlayWindowController(
     private val context: Context,
     private val onBubbleTap: () -> Unit,
     private val onSend: (String) -> Unit,
     private val onPanelClosed: () -> Unit,
-    private val onRetry: () -> Unit,
+    private val onNewChat: () -> Unit,
+    private val onMore: () -> Unit,
+    private val onOpenInClaude: () -> Unit,
 ) {
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
@@ -51,7 +55,13 @@ class OverlayWindowController(
     }
 
     private var panel: AskPanelView? = null
+    private var panelParams: WindowManager.LayoutParams? = null
+    private var scrim: View? = null
     private var banner: SessionBannerView? = null
+    private var menu: BubbleMenuView? = null
+    private var menuScrim: View? = null
+
+    private val panelWidthDp = 320
 
     fun addBubble() {
         bubble = BubbleView(
@@ -61,6 +71,7 @@ class OverlayWindowController(
                 bubbleParams.x += dx
                 bubbleParams.y += dy
                 safeUpdate(bubble, bubbleParams)
+                movePanelToBubble()
             },
             onDragEnd = ::snapToEdge,
         )
@@ -73,28 +84,50 @@ class OverlayWindowController(
         bubbleParams.x = if (bubbleParams.x + bubble.width / 2 < mid) 24 else screenWidth - bubble.width - 24
         bubbleParams.y = max(0, min(bubbleParams.y, context.resources.displayMetrics.heightPixels - bubble.height))
         safeUpdate(bubble, bubbleParams)
+        movePanelToBubble()
     }
 
+    fun isPanelOpen(): Boolean = panel != null
+
+    /** Show the chat panel anchored to the bubble, with a tap-outside scrim. */
     fun showPanel(): AskPanelView {
         panel?.let { return it }
+
+        // Scrim first (behind panel): catches taps outside the chat to close it.
+        val scrimView = View(context).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            setOnTouchListener { _, event ->
+                if (event.action == MotionEvent.ACTION_DOWN) { hidePanel(); true } else false
+            }
+        }
+        val scrimParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        )
+        wm.addView(scrimView, scrimParams)
+        scrim = scrimView
+
         val view = AskPanelView(
             context,
             onSend = onSend,
             onClose = ::hidePanel,
-            onRetry = onRetry,
+            onNewChat = onNewChat,
+            onMore = onMore,
+            onOpenInClaude = onOpenInClaude,
         )
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            dp(panelWidthDp),
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType,
-            // Focusable so the EditText gets the keyboard; ADJUST_RESIZE keeps
-            // the panel above the IME.
+            // Focusable for the keyboard; NOT_TOUCH_MODAL lets outside taps fall
+            // through to the scrim behind.
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 24
-            y = 300
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
         view.setOnKeyListener { _, keyCode, event ->
@@ -102,19 +135,93 @@ class OverlayWindowController(
                 hidePanel(); true
             } else false
         }
+        panelParams = params
         wm.addView(view, params)
-        view.focusInput()
         panel = view
+        movePanelToBubble()
+        raiseBubble()
         return view
+    }
+
+    /** Keep the chat pinned near the bubble as it moves / snaps. */
+    private fun movePanelToBubble() {
+        val p = panelParams ?: return
+        val view = panel ?: return
+        val screenW = context.resources.displayMetrics.widthPixels
+        val panelW = dp(panelWidthDp)
+        // Prefer left-aligned to the bubble; clamp within the screen.
+        p.x = max(8, min(bubbleParams.x, screenW - panelW - 8))
+        p.y = bubbleParams.y + dp(64)
+        safeUpdate(view, p)
+    }
+
+    /** Re-add the bubble so it draws above the chat panel. */
+    private fun raiseBubble() {
+        if (!::bubble.isInitialized) return
+        safeRemove(bubble)
+        wm.addView(bubble, bubbleParams)
     }
 
     fun hidePanel() {
         panel?.let { safeRemove(it) }
         panel = null
+        panelParams = null
+        scrim?.let { safeRemove(it) }
+        scrim = null
         onPanelClosed()
     }
 
     fun panel(): AskPanelView? = panel
+
+    fun toggleMenu(items: List<MenuItem>) {
+        if (menu != null) { hideMenu(); return }
+
+        // Menu's own dismiss layer (above the chat): an outside tap closes ONLY
+        // the menu and keeps the chat open, rather than falling through to the
+        // chat's scrim (which would close the whole chat).
+        val menuScrimView = View(context).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            setOnTouchListener { _, event ->
+                if (event.action == MotionEvent.ACTION_DOWN) { hideMenu(); true } else false
+            }
+        }
+        wm.addView(
+            menuScrimView,
+            WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT,
+            ),
+        )
+        menuScrim = menuScrimView
+
+        val view = BubbleMenuView(context, items)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = max(8, min(bubbleParams.x, context.resources.displayMetrics.widthPixels - dp(240)))
+            y = bubbleParams.y + dp(64)
+        }
+        wm.addView(view, params)
+        menu = view
+        raiseBubble()
+    }
+
+    fun hideMenu() {
+        menu?.let { safeRemove(it) }
+        menu = null
+        menuScrim?.let { safeRemove(it) }
+        menuScrim = null
+        // Return keyboard focus to the chat.
+        panel?.focusInput()
+    }
 
     fun showBanner(text: String? = null) {
         if (banner != null) {
@@ -144,10 +251,13 @@ class OverlayWindowController(
     }
 
     fun destroy() {
+        hideMenu()
         hidePanel()
         hideBanner()
         if (::bubble.isInitialized) safeRemove(bubble)
     }
+
+    private fun dp(v: Int) = (v * context.resources.displayMetrics.density).toInt()
 
     private fun safeUpdate(view: View, params: WindowManager.LayoutParams) {
         runCatching { wm.updateViewLayout(view, params) }

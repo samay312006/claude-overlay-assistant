@@ -23,11 +23,31 @@ class MatchedNode(val node: UiNode, val live: AccessibilityNodeInfo?)
 class UiQuery(private val service: AssistAccessibilityService) {
 
     fun snapshotNow(): UiTreeReader = UiTreeReader.read(
-        root = service.rootInActiveWindow,
+        root = resolveTargetRoot(),
         foregroundPackage = AssistAccessibilityService.foregroundPackage.value,
         nowMs = System.currentTimeMillis(),
         excludePackage = service.packageName,
     )
+
+    /**
+     * The window to read when driving another app. [rootInActiveWindow] is the
+     * *focused* window — while our ask panel (a focusable overlay) is open, that
+     * is OUR window, not the app we're driving, so reading it (then excluding
+     * our own package) yields an empty tree. Instead prefer the foreground app's
+     * window from the full window list, only falling back to the active window.
+     */
+    private fun resolveTargetRoot(): AccessibilityNodeInfo? {
+        val mine = service.packageName
+        val fg = AssistAccessibilityService.foregroundPackage.value
+
+        service.rootInActiveWindow?.let { active ->
+            if (active.packageName?.toString() != mine) return active
+        }
+
+        val roots = service.windows.mapNotNull { it.root }
+        roots.firstOrNull { fg.isNotEmpty() && it.packageName?.toString() == fg }?.let { return it }
+        return roots.lastOrNull { it.packageName?.toString() != mine }
+    }
 
     /** Serializable tree for Driver Doctor. */
     fun snapshot(): UiSnapshot = snapshotNow().let { reader ->

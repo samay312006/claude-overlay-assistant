@@ -5,4 +5,5 @@
     <string name="overlay_notification_channel">Assistant overlay</string>
     <string name="overlay_notification_title">Claude Assist is running</string>
     <string name="overlay_notification_text">Tap the bubble to ask about your screen</string>
+    <string name="notification_listener_label">Claude Assist reply reader</string>
 </resources>

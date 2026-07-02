@@ -123,6 +123,42 @@ class ClaudeAppDriver(
         }
     }
 
+    /**
+     * Opens Claude, attaches the screenshot (when present), types the prompt and
+     * taps send — then returns. No foreground polling: the caller backgrounds
+     * Claude and reads the answer from Claude's completion notification. Records
+     * the app the user came from so it can be restored.
+     */
+    suspend fun submitAsk(image: Bitmap?, prompt: String) {
+        lastForegroundPackage = AssistAccessibilityService.foregroundPackage.value
+
+        checkReadiness().firstFailure?.let { throw DriverException(it.detail.ifEmpty { it.name }) }
+        val h = handle()
+        val exec = h.exec
+        val query = h.query
+
+        val sharedImage = image != null && openWithSharedImage(image)
+        if (!sharedImage && !exec.launchApp(ClaudeAppSelectors.PACKAGE)) {
+            throw DriverException("Couldn't launch the Claude app.")
+        }
+
+        val input = query.await(ClaudeAppSelectors.inputField, timeoutMs = 8_000)
+            ?: throw DriverException(
+                "Couldn't find the Claude message field. Run Driver Doctor and update selectors.",
+            )
+        if (!exec.typeText(input, prompt)) {
+            throw DriverException("Couldn't type into the Claude message field.")
+        }
+        delay(300)
+
+        val send = query.await(ClaudeAppSelectors.sendButton, timeoutMs = 4_000)
+            ?: throw DriverException("Couldn't find the send button in the Claude app.")
+        if (!exec.tap(send)) {
+            throw DriverException("Couldn't tap send in the Claude app.")
+        }
+        delay(400) // let the send register before the caller backgrounds Claude
+    }
+
     /** @return true if the share intent was dispatched; false to fall back to launch. */
     private fun openWithSharedImage(image: Bitmap): Boolean {
         val uri: Uri = Images.writeForShare(appContext, image)

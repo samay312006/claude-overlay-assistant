@@ -50,6 +50,9 @@ class App : Application() {
         val claudeBrain = ClaudeAppBrain(
             driver = driver,
             onRun = { runLog -> telemetryStore.record(runLog) },
+            notificationAccessEnabled = {
+                com.claudeassist.overlay.notifications.ClaudeNotificationListener.isEnabled(this)
+            },
         )
         val allBrains: List<Brain> = listOf(
             claudeBrain,

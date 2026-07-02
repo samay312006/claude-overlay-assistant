@@ -47,6 +47,9 @@ fun OnboardingScreen(app: App) {
     val canOverlay = Permissions.canDrawOverlays(context)
     val accessibilityOn = Permissions.isAccessibilityEnabled(context)
     val notificationsOn = Permissions.hasNotificationPermission(context)
+    val notifAccessOn =
+        com.claudeassist.overlay.notifications.ClaudeNotificationListener.isEnabled(context)
+    val batteryUnrestricted = Permissions.isIgnoringBatteryOptimizations(context)
 
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -87,6 +90,34 @@ fun OnboardingScreen(app: App) {
         },
     )
 
+    StepCard(
+        title = "4. Notification access",
+        done = notifAccessOn,
+        body = "Lets the assistant read Claude's reply notification, so answers come back to " +
+            "the overlay while you keep working in other apps. Find \"Claude Assist\" in the " +
+            "list and turn it on.",
+        buttonText = "Open Notification access",
+        onClick = {
+            context.startActivity(
+                com.claudeassist.overlay.notifications.ClaudeNotificationListener.settingsIntent()
+            )
+        },
+    )
+
+    StepCard(
+        title = "5. Keep running in background",
+        done = batteryUnrestricted,
+        body = "So the bubble survives when you clear recent apps. Tap below and choose " +
+            "\"Allow\" / \"Don't optimize\".\n\n" +
+            "On OPPO/OnePlus/Xiaomi phones this isn't enough on its own — also open App info " +
+            "(button below) and enable \"Auto-launch\" / \"Allow background activity\", and in " +
+            "Recent apps lock this app (drag it down or tap the lock icon).",
+        buttonText = "Allow background (battery)",
+        onClick = { context.startActivity(Permissions.ignoreBatteryOptimizationsIntent(context)) },
+        secondButtonText = "Open App info (auto-launch)",
+        onSecondClick = { context.startActivity(Permissions.appDetailsSettingsIntent(context)) },
+    )
+
     Spacer(Modifier.height(16.dp))
     Button(
         onClick = {
@@ -111,6 +142,8 @@ private fun StepCard(
     body: String,
     buttonText: String,
     onClick: () -> Unit,
+    secondButtonText: String? = null,
+    onSecondClick: (() -> Unit)? = null,
 ) {
     Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(Modifier.padding(14.dp)) {
@@ -121,6 +154,10 @@ private fun StepCard(
             if (!done) {
                 Spacer(Modifier.height(10.dp))
                 Button(onClick = onClick) { Text(buttonText) }
+            }
+            if (secondButtonText != null && onSecondClick != null) {
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onSecondClick) { Text(secondButtonText) }
             }
         }
     }

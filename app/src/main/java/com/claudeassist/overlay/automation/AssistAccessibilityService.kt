@@ -1,6 +1,7 @@
 package com.claudeassist.overlay.automation
 
 import android.accessibilityservice.AccessibilityService
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,13 +26,26 @@ class AssistAccessibilityService : AccessibilityService() {
         event ?: return
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()
-            // Ignore our own overlay windows so foreground tracking reflects the
-            // app the user is actually looking at.
-            if (!pkg.isNullOrEmpty() && pkg != packageName) {
+            // Ignore our own overlay windows AND transient windows (soft
+            // keyboard, system UI) so foreground tracking reflects the app the
+            // user is actually looking at. Without this, the keyboard popping up
+            // during automation reads as "the user switched apps".
+            if (!pkg.isNullOrEmpty() && pkg != packageName && !isTransientWindowPackage(pkg)) {
                 _foregroundPackage.value = pkg
             }
         }
         _events.tryEmit(event.eventType)
+    }
+
+    /** True for windows that aren't the app the user is looking at: the current
+     *  input method (soft keyboard) and the system UI. */
+    private fun isTransientWindowPackage(pkg: String): Boolean {
+        if (pkg == "com.android.systemui") return true
+        val ime = runCatching {
+            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        }.getOrNull()
+        val imePkg = ime?.substringBefore('/')?.takeIf { it.isNotEmpty() }
+        return imePkg != null && pkg == imePkg
     }
 
     override fun onInterrupt() {}

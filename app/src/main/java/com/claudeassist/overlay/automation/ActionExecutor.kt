@@ -21,11 +21,19 @@ import kotlin.coroutines.resume
 class ActionExecutor(private val service: AssistAccessibilityService) {
 
     suspend fun tap(matched: MatchedNode): Boolean {
-        val live = matched.live
-        if (live != null && live.isClickable &&
-            live.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        ) {
-            return true
+        // Prefer a real ACTION_CLICK on the node or its nearest clickable
+        // ancestor. Compose apps often label an icon node (e.g. content-desc
+        // "Send") that is NOT itself clickable — the clickable target is a
+        // parent. A real click is also immune to our overlay window
+        // intercepting a coordinate gesture at that screen location.
+        var node: AccessibilityNodeInfo? = matched.live
+        var hops = 0
+        while (node != null && hops < 6) {
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+            node = node.parent
+            hops++
         }
         return tapAt(matched.node.bounds.centerX, matched.node.bounds.centerY)
     }
