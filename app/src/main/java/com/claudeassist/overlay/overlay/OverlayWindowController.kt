@@ -58,8 +58,9 @@ class OverlayWindowController(
     private var panelParams: WindowManager.LayoutParams? = null
     private var scrim: View? = null
     private var banner: SessionBannerView? = null
-    private var menu: BubbleMenuView? = null
-    private var menuScrim: View? = null
+    private var dropdown: BubbleDropdownView? = null
+    private var dropdownScrim: View? = null
+    private var regionSelect: RegionSelectView? = null
 
     private val panelWidthDp = 320
 
@@ -165,20 +166,21 @@ class OverlayWindowController(
 
     fun panel(): AskPanelView? = panel
 
-    fun toggleMenu(items: List<MenuItem>) {
-        if (menu != null) { hideMenu(); return }
+    fun isDropdownOpen(): Boolean = dropdown != null
 
-        // Menu's own dismiss layer (above the chat): an outside tap closes ONLY
-        // the menu and keeps the chat open, rather than falling through to the
-        // chat's scrim (which would close the whole chat).
-        val menuScrimView = View(context).apply {
+    /** Show the animated action dropdown anchored under the bubble. An outside
+     *  tap closes ONLY the dropdown (its own transparent dismiss layer). */
+    fun showDropdown(items: List<MenuItem>) {
+        if (dropdown != null) { hideDropdown(); return }
+
+        val scrimView = View(context).apply {
             setBackgroundColor(Color.TRANSPARENT)
             setOnTouchListener { _, event ->
-                if (event.action == MotionEvent.ACTION_DOWN) { hideMenu(); true } else false
+                if (event.action == MotionEvent.ACTION_DOWN) { hideDropdown(); true } else false
             }
         }
         wm.addView(
-            menuScrimView,
+            scrimView,
             WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -187,9 +189,9 @@ class OverlayWindowController(
                 PixelFormat.TRANSLUCENT,
             ),
         )
-        menuScrim = menuScrimView
+        dropdownScrim = scrimView
 
-        val view = BubbleMenuView(context, items)
+        val view = BubbleDropdownView(context, items)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -198,21 +200,52 @@ class OverlayWindowController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = max(8, min(bubbleParams.x, context.resources.displayMetrics.widthPixels - dp(240)))
+            x = max(8, min(bubbleParams.x, context.resources.displayMetrics.widthPixels - dp(200)))
             y = bubbleParams.y + dp(64)
         }
         wm.addView(view, params)
-        menu = view
+        dropdown = view
         raiseBubble()
+        view.animateIn()
     }
 
-    fun hideMenu() {
-        menu?.let { safeRemove(it) }
-        menu = null
-        menuScrim?.let { safeRemove(it) }
-        menuScrim = null
-        // Return keyboard focus to the chat.
-        panel?.focusInput()
+    fun hideDropdown() {
+        dropdown?.let { safeRemove(it) }
+        dropdown = null
+        dropdownScrim?.let { safeRemove(it) }
+        dropdownScrim = null
+    }
+
+    /** Full-screen region selector for circle search (focusable for Back-to-cancel). */
+    fun showRegionSelect(screenshot: android.graphics.Bitmap, onDone: (android.graphics.Bitmap) -> Unit) {
+        hideRegionSelect()
+        val view = RegionSelectView(
+            context,
+            screenshot,
+            onDone = { crop -> hideRegionSelect(); onDone(crop) },
+            onCancel = { hideRegionSelect() },
+        )
+        view.isFocusableInTouchMode = true
+        view.setOnKeyListener { _, keyCode, event ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                hideRegionSelect(); true
+            } else false
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayType,
+            0, // focusable + touchable (modal): capture the drag and the Back key
+            PixelFormat.TRANSLUCENT,
+        )
+        wm.addView(view, params)
+        view.requestFocus()
+        regionSelect = view
+    }
+
+    fun hideRegionSelect() {
+        regionSelect?.let { safeRemove(it) }
+        regionSelect = null
     }
 
     fun showBanner(text: String? = null) {
@@ -243,7 +276,8 @@ class OverlayWindowController(
     }
 
     fun destroy() {
-        hideMenu()
+        hideDropdown()
+        hideRegionSelect()
         hidePanel()
         hideBanner()
         if (::bubble.isInitialized) safeRemove(bubble)
