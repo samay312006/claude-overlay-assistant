@@ -77,6 +77,10 @@ class RegionSelectView(
     private val pathPts = ArrayList<Pair<Float, Float>>()
     private val drawPath = Path()
 
+    // True while a chip tap owns the current gesture, so the leftover MOVE/UP of
+    // that same touch isn't misread as a draw (or a finish) by the mode handler.
+    private var chipConsumedGesture = false
+
     override fun onDraw(canvas: Canvas) {
         canvas.drawBitmap(screenshot, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), bmpPaint)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dim)
@@ -128,10 +132,19 @@ class RegionSelectView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        // Chip taps switch mode (only on a clean DOWN on a chip).
-        if (event.action == MotionEvent.ACTION_DOWN) {
-            if (rectChip.contains(event.x, event.y)) { switchTo(Mode.RECTANGLE); return true }
-            if (freeChip.contains(event.x, event.y)) { switchTo(Mode.FREEHAND); return true }
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                chipConsumedGesture = false
+                if (rectChip.contains(event.x, event.y)) {
+                    switchTo(Mode.RECTANGLE); chipConsumedGesture = true; return true
+                }
+                if (freeChip.contains(event.x, event.y)) {
+                    switchTo(Mode.FREEHAND); chipConsumedGesture = true; return true
+                }
+            }
+            MotionEvent.ACTION_MOVE -> if (chipConsumedGesture) return true
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                if (chipConsumedGesture) { chipConsumedGesture = false; return true }
         }
         return when (mode) {
             Mode.RECTANGLE -> onRectTouch(event)
