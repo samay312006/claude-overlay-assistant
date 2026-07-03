@@ -28,6 +28,7 @@ class AskPanelView(
     private val onSend: (String) -> Unit,
     private val onClose: () -> Unit,
     private val onNewChat: () -> Unit,
+    private val onAttachScreen: () -> Unit,
     private val onOpenInClaude: () -> Unit,
 ) : LinearLayout(context) {
 
@@ -134,6 +135,9 @@ class AskPanelView(
             val h = dp(14); val v = dp(10)
             setPadding(h, v, h, v)
         }
+        inputRow.addView(attachButton(), LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+            rightMargin = dp(6)
+        })
         inputRow.addView(input, LinearLayout.LayoutParams(0, wrap(), 1f))
         inputRow.addView(sendButton(), LinearLayout.LayoutParams(dp(44), dp(44)).apply {
             leftMargin = dp(8)
@@ -272,6 +276,14 @@ class AskPanelView(
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
         val p = dp(8); setPadding(p, p, p, p)
         setOnClickListener { onClick() }
+    }
+
+    private fun attachButton(): View = TextView(context).apply {
+        text = "📷"
+        gravity = Gravity.CENTER
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        background = card(Color.parseColor("#F1F3F4"), 20f)
+        setOnClickListener { onAttachScreen() }
     }
 
     private fun sendButton(): View = TextView(context).apply {

@@ -39,10 +39,10 @@ class OverlayService : Service() {
 
     // Persistent chat session (survives closing/reopening the panel).
     private val messages = mutableListOf<ChatMessage>()
-    private var sessionImage: Bitmap? = null
-    private var sessionActive = false
 
-    // A one-shot image (e.g. a circle-search crop) attached to the NEXT ask.
+    // A one-shot image attached to the NEXT ask: a Capture crop, or the current
+    // screen grabbed on demand via the chat's 📷 button. Null = a normal, text-
+    // only question (the default — the screen is never attached automatically).
     private var pendingAttachment: Bitmap? = null
 
     override fun onCreate() {
@@ -55,6 +55,7 @@ class OverlayService : Service() {
             onSend = ::onSend,
             onPanelClosed = { /* nothing extra to tear down */ },
             onNewChat = ::onNewChat,
+            onAttachScreen = ::onAttachScreen,
             onOpenInClaude = {
                 // Retract the chat so Claude is actually visible.
                 controller.hidePanel()
@@ -105,17 +106,29 @@ class OverlayService : Service() {
         )
     }
 
-    /** Open the chat, resuming the session; a screenshot is captured only when
-     *  starting a fresh session. */
+    /** Open the chat as a normal chatbox — no screenshot is attached by default.
+     *  The conversation (and any pending attachment) is resumed as-is. */
     private fun openChat() {
+        val panel = controller.showPanel()
+        panel.render(messages, typing = askJob?.isActive == true)
+        panel.showAttachment(pendingAttachment) { clearPendingAttachment() }
+        panel.focusInput()
+    }
+
+    /** Chat 📷 button: grab the current screen on demand and attach it (with a
+     *  clearable preview) to the next message. */
+    private fun onAttachScreen() {
+        controller.hidePanel()
         scope.launch {
-            if (!sessionActive) {
-                sessionImage = if (app.settings.attachScreenshot) captureScreenshot() else null
-                sessionActive = true
-            }
+            // Let our overlay windows clear so they're not in the screenshot.
+            kotlinx.coroutines.delay(120)
+            val shot = captureScreenshot()
             val panel = controller.showPanel()
             panel.render(messages, typing = askJob?.isActive == true)
-            panel.showAttachment(pendingAttachment) { clearPendingAttachment() }
+            if (shot != null) {
+                pendingAttachment = shot
+                panel.showAttachment(shot) { clearPendingAttachment() }
+            }
             panel.focusInput()
         }
     }
@@ -130,7 +143,6 @@ class OverlayService : Service() {
             val shot = captureScreenshot() ?: return@launch
             controller.showRegionSelect(shot) { crop ->
                 pendingAttachment = crop
-                sessionActive = true
                 val panel = controller.showPanel()
                 panel.render(messages, typing = false)
                 panel.showAttachment(crop) { clearPendingAttachment() }
@@ -144,25 +156,20 @@ class OverlayService : Service() {
         controller.panel()?.showAttachment(null) {}
     }
 
-    /** Header "new chat": clear the conversation and grab a fresh screenshot. */
+    /** Header "new chat": clear the conversation and any pending attachment. */
     private fun onNewChat() {
         askJob?.cancel()
         messages.clear()
-        sessionActive = false
-        sessionImage = null
+        pendingAttachment = null
         controller.panel()?.render(messages, typing = false)
-        scope.launch {
-            if (app.settings.attachScreenshot) sessionImage = captureScreenshot()
-            sessionActive = true
-        }
+        controller.panel()?.showAttachment(null) {}
     }
 
     private fun onSend(prompt: String) {
         val brain: Brain = app.brains.active.value
-        val firstUserMessage = messages.none { it.role == ChatMessage.Role.USER }
-        // A circle-search crop (pendingAttachment) takes priority; otherwise the
-        // session screenshot is attached to the first message only.
-        val attach = pendingAttachment ?: if (firstUserMessage) sessionImage else null
+        // Attach only what the user explicitly staged (a Capture crop or a 📷
+        // screen grab); otherwise it's a normal, text-only question.
+        val attach = pendingAttachment
         pendingAttachment = null
         controller.panel()?.showAttachment(null) {}
         messages.add(ChatMessage(ChatMessage.Role.USER, prompt, thumb = attach))
