@@ -27,7 +27,6 @@ class OverlayWindowController(
     private val onSend: (String) -> Unit,
     private val onPanelClosed: () -> Unit,
     private val onNewChat: () -> Unit,
-    private val onMore: () -> Unit,
     private val onOpenInClaude: () -> Unit,
 ) {
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -105,7 +104,6 @@ class OverlayWindowController(
             onSend = onSend,
             onClose = ::hidePanel,
             onNewChat = onNewChat,
-            onMore = onMore,
             onOpenInClaude = onOpenInClaude,
         )
         view.onOutsideTouch = { if (!suppressOutsideClose) hidePanel() }

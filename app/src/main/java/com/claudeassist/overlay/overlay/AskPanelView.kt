@@ -1,6 +1,7 @@
 package com.claudeassist.overlay.overlay
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
@@ -27,7 +28,6 @@ class AskPanelView(
     private val onSend: (String) -> Unit,
     private val onClose: () -> Unit,
     private val onNewChat: () -> Unit,
-    private val onMore: () -> Unit,
     private val onOpenInClaude: () -> Unit,
 ) : LinearLayout(context) {
 
@@ -36,9 +36,13 @@ class AskPanelView(
     private val scroll: ScrollView
     private val input: EditText
     private val emptyHint: TextView
+    private val attachmentRow: LinearLayout
+    private val attachmentThumb: ImageView
 
     /** Invoked when the user taps outside the panel (FLAG_WATCH_OUTSIDE_TOUCH). */
     var onOutsideTouch: (() -> Unit)? = null
+
+    private var attachmentClear: (() -> Unit)? = null
 
     private val userColor = Color.parseColor("#E8815A")
     private val userTextColor = Color.WHITE
@@ -67,7 +71,6 @@ class AskPanelView(
             layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f)
         })
         header.addView(iconButton("✎") { onNewChat() })   // new chat
-        header.addView(iconButton("⋯") { onMore() })       // more actions
         header.addView(iconButton("✕") { onClose() })      // close
         addView(header, matchWrap())
 
@@ -87,6 +90,33 @@ class AskPanelView(
         messagesContainer.addView(emptyHint)
         scroll.addView(messagesContainer)
         addView(scroll, LinearLayout.LayoutParams(matchParent(), dp(300)).apply { topMargin = dp(8) })
+
+        // ---- Attached-region preview (hidden unless a capture is pending) ----
+        attachmentThumb = ImageView(context).apply {
+            adjustViewBounds = true
+            maxHeight = dp(64)
+            background = card(Color.parseColor("#33000000"), 10f)
+        }
+        val clearBtn = TextView(context).apply {
+            text = "✕"
+            setTextColor(Color.parseColor("#5F6368"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            val p = dp(6); setPadding(p, p, p, p)
+        }
+        attachmentRow = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            addView(TextView(context).apply {
+                text = "Region attached"
+                setTextColor(Color.parseColor("#5F6368"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            }, LinearLayout.LayoutParams(0, wrap(), 1f))
+            addView(attachmentThumb, LinearLayout.LayoutParams(wrap(), dp(48)).apply { rightMargin = dp(6) })
+            addView(clearBtn, LinearLayout.LayoutParams(wrap(), wrap()))
+        }
+        clearBtn.setOnClickListener { attachmentClear?.invoke() }
+        addView(attachmentRow, matchWrap().apply { topMargin = dp(8) })
 
         // ---- Input row ----
         val inputRow = LinearLayout(context).apply {
@@ -128,6 +158,18 @@ class AskPanelView(
     fun inputText(): String = input.text.toString().trim()
     fun clearInput() { input.setText("") }
     fun focusInput() { input.requestFocus() }
+
+    /** Show (or hide, if null) the pending-capture preview above the input. */
+    fun showAttachment(bitmap: Bitmap?, onClear: () -> Unit) {
+        attachmentClear = onClear
+        if (bitmap == null) {
+            attachmentRow.visibility = View.GONE
+            attachmentThumb.setImageBitmap(null)
+        } else {
+            attachmentThumb.setImageBitmap(bitmap)
+            attachmentRow.visibility = View.VISIBLE
+        }
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action == MotionEvent.ACTION_OUTSIDE) {

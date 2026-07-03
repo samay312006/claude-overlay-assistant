@@ -42,6 +42,9 @@ class OverlayService : Service() {
     private var sessionImage: Bitmap? = null
     private var sessionActive = false
 
+    // A one-shot image (e.g. a circle-search crop) attached to the NEXT ask.
+    private var pendingAttachment: Bitmap? = null
+
     override fun onCreate() {
         super.onCreate()
         app = application as App
@@ -50,9 +53,8 @@ class OverlayService : Service() {
             context = this,
             onBubbleTap = ::onBubbleTap,
             onSend = ::onSend,
-            onPanelClosed = { controller.hideMenu() },
+            onPanelClosed = { /* nothing extra to tear down */ },
             onNewChat = ::onNewChat,
-            onMore = ::onMore,
             onOpenInClaude = {
                 // Retract the chat so Claude is actually visible.
                 controller.hidePanel()
@@ -87,13 +89,25 @@ class OverlayService : Service() {
         super.onTaskRemoved(rootIntent)
     }
 
-    /** Bubble tap toggles the chat. Opening resumes the existing conversation;
-     *  a screenshot is captured only when starting a fresh session. */
+    /** Bubble tap toggles the animated action dropdown. */
     private fun onBubbleTap() {
-        if (controller.isPanelOpen()) {
-            controller.hidePanel()
-            return
-        }
+        if (controller.isDropdownOpen()) { controller.hideDropdown(); return }
+        controller.showDropdown(
+            listOf(
+                MenuItem("💬", "Ask") { controller.hideDropdown(); openChat() },
+                MenuItem("✏️", "Capture") { controller.hideDropdown(); onCapture() },
+                MenuItem("🅰️", "Open Claude") {
+                    controller.hideDropdown()
+                    com.claudeassist.overlay.notifications.ClaudeNotificationListener.openLatest(this)
+                },
+                MenuItem("🎤", "Voice", enabled = false) {},
+            ),
+        )
+    }
+
+    /** Open the chat, resuming the session; a screenshot is captured only when
+     *  starting a fresh session. */
+    private fun openChat() {
         scope.launch {
             if (!sessionActive) {
                 sessionImage = if (app.settings.attachScreenshot) captureScreenshot() else null
@@ -101,23 +115,33 @@ class OverlayService : Service() {
             }
             val panel = controller.showPanel()
             panel.render(messages, typing = askJob?.isActive == true)
+            panel.showAttachment(pendingAttachment) { clearPendingAttachment() }
             panel.focusInput()
         }
     }
 
-    /** Header "more" opens the action menu (Open Claude / circle / voice). */
-    private fun onMore() {
-        controller.toggleMenu(
-            listOf(
-                MenuItem("💬", "Open Claude") {
-                    controller.hideMenu()
-                    controller.hidePanel()
-                    com.claudeassist.overlay.notifications.ClaudeNotificationListener.openLatest(this)
-                },
-                MenuItem("◯", "Circle search", enabled = false) {},
-                MenuItem("🎤", "Voice dictation", enabled = false) {},
-            ),
-        )
+    /** Capture: freeze a screenshot, let the user mark a region (rectangle or
+     *  freehand), attach the crop as a clearable preview on the next ask. */
+    private fun onCapture() {
+        controller.hidePanel()
+        scope.launch {
+            // Let our overlay windows clear so they're not in the screenshot.
+            kotlinx.coroutines.delay(120)
+            val shot = captureScreenshot() ?: return@launch
+            controller.showRegionSelect(shot) { crop ->
+                pendingAttachment = crop
+                sessionActive = true
+                val panel = controller.showPanel()
+                panel.render(messages, typing = false)
+                panel.showAttachment(crop) { clearPendingAttachment() }
+                panel.focusInput()
+            }
+        }
+    }
+
+    private fun clearPendingAttachment() {
+        pendingAttachment = null
+        controller.panel()?.showAttachment(null) {}
     }
 
     /** Header "new chat": clear the conversation and grab a fresh screenshot. */
@@ -136,14 +160,16 @@ class OverlayService : Service() {
     private fun onSend(prompt: String) {
         val brain: Brain = app.brains.active.value
         val firstUserMessage = messages.none { it.role == ChatMessage.Role.USER }
-        // Attach the session screenshot to the first message only; follow-ups are
-        // text within the same Claude conversation.
-        val thumb = if (firstUserMessage) sessionImage else null
-        messages.add(ChatMessage(ChatMessage.Role.USER, prompt, thumb = thumb))
+        // A circle-search crop (pendingAttachment) takes priority; otherwise the
+        // session screenshot is attached to the first message only.
+        val attach = pendingAttachment ?: if (firstUserMessage) sessionImage else null
+        pendingAttachment = null
+        controller.panel()?.showAttachment(null) {}
+        messages.add(ChatMessage(ChatMessage.Role.USER, prompt, thumb = attach))
         controller.panel()?.clearInput()
         controller.panel()?.render(messages, typing = true)
 
-        val imageForAsk = if (firstUserMessage) sessionImage else null
+        val imageForAsk = attach
         askJob?.cancel()
         controller.suppressOutsideClose = true // keep chat open while Claude is driven
         askJob = scope.launch {
