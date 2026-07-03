@@ -6,6 +6,7 @@ import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.EditText
 import android.widget.ImageView
@@ -35,6 +36,9 @@ class AskPanelView(
     private val scroll: ScrollView
     private val input: EditText
     private val emptyHint: TextView
+
+    /** Invoked when the user taps outside the panel (FLAG_WATCH_OUTSIDE_TOUCH). */
+    var onOutsideTouch: (() -> Unit)? = null
 
     private val userColor = Color.parseColor("#E8815A")
     private val userTextColor = Color.WHITE
@@ -125,6 +129,14 @@ class AskPanelView(
     fun clearInput() { input.setText("") }
     fun focusInput() { input.requestFocus() }
 
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_OUTSIDE) {
+            onOutsideTouch?.invoke()
+            return true
+        }
+        return super.onTouchEvent(event)
+    }
+
     // ---- Bubble builders ----
 
     private fun bubbleFor(msg: ChatMessage): View {
@@ -134,6 +146,11 @@ class AskPanelView(
             gravity = if (isUser) Gravity.END else Gravity.START
             val v = dp(3)
             setPadding(0, v, 0, v)
+            // Full-width row so END/START gravity actually aligns the bubble.
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
         }
 
         val bubble = LinearLayout(context).apply {
@@ -156,28 +173,37 @@ class AskPanelView(
             }, LinearLayout.LayoutParams(wrap(), wrap()).apply { bottomMargin = dp(6) })
         }
 
-        bubble.addView(TextView(context).apply {
-            text = msg.text
-            setTextColor(
-                when {
-                    msg.error -> errorTextColor
-                    isUser -> userTextColor
-                    else -> claudeTextColor
-                },
-            )
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextIsSelectable(true)
-            maxWidth = dp(232) // wrap long lines instead of stretching edge-to-edge
-        })
+        bubble.addView(
+            TextView(context).apply {
+                text = msg.text
+                setTextColor(
+                    when {
+                        msg.error -> errorTextColor
+                        isUser -> userTextColor
+                        else -> claudeTextColor
+                    },
+                )
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextIsSelectable(true)
+                maxWidth = dp(232) // wrap long lines instead of stretching edge-to-edge
+            },
+            // Explicit WRAP_CONTENT: a vertical LinearLayout defaults children to
+            // MATCH_PARENT width, which would shrink the text to the narrow
+            // screenshot's width and wrap one word per line.
+            LinearLayout.LayoutParams(wrap(), wrap()),
+        )
 
         if (msg.truncated) {
-            bubble.addView(TextView(context).apply {
-                text = "Open in Claude ›"
-                setTextColor(Color.parseColor("#1A73E8"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setPadding(0, dp(6), 0, 0)
-                setOnClickListener { onOpenInClaude() }
-            })
+            bubble.addView(
+                TextView(context).apply {
+                    text = "Open in Claude ›"
+                    setTextColor(Color.parseColor("#1A73E8"))
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setPadding(0, dp(6), 0, 0)
+                    setOnClickListener { onOpenInClaude() }
+                },
+                LinearLayout.LayoutParams(wrap(), wrap()),
+            )
         }
 
         row.addView(bubble, LinearLayout.LayoutParams(wrap(), wrap()))

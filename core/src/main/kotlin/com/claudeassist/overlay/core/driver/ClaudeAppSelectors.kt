@@ -54,6 +54,16 @@ object ClaudeAppSelectors {
     /** The scrollable conversation list. */
     val messageList: NodeMatcher = Matchers.scrollable
 
+    /**
+     * Marks a COMPLETED assistant turn: the action row (Copy / Retry) only
+     * appears once Claude has finished responding. Used both to know the answer
+     * is ready and to bound where the answer text ends.
+     */
+    val answerComplete: NodeMatcher = Matchers.anyOf(
+        Matchers.descContains("copy message"),
+        Matchers.descContains("retry message"),
+    )
+
     /** Claude-app error states worth surfacing (network down, message failed). */
     val errorIndicator: NodeMatcher = Matchers.anyOf(
         Matchers.textContains("something went wrong"),
@@ -66,46 +76,48 @@ object ClaudeAppSelectors {
 
     /** Chrome/boilerplate text that must never be mistaken for an answer. */
     val ignoredText: NodeMatcher = Matchers.anyOf(
-        Matchers.textContains("claude can make mistakes"),
+        Matchers.textContains("can make mistakes"),
+        Matchers.textContains("double-check responses"),
         Matchers.textContains("message claude"),
         Matchers.textContains("reply to claude"),
+        Matchers.textContains("chat with claude"),
+        Matchers.textContains("back at it"), // home-screen greeting
         Matchers.textEquals("claude"),
+        Matchers.textEquals("sonnet 5"),
+        Matchers.textEquals("thinking"),
+        Matchers.textEquals("•"),
         Matchers.textContains("upgrade"),
     )
+
+    /** True once Claude has finished the current response (action row present). */
+    fun isAnswerComplete(snapshot: UiSnapshot): Boolean =
+        snapshot.findFirst(answerComplete) != null
 
     /**
      * Extracts the assistant's latest answer from a chat-screen snapshot.
      *
-     * Heuristic: within the largest scrollable container (or the whole tree if
-     * none), collect non-editable text nodes in depth-first order, drop chrome
-     * text, locate the last node matching the just-sent prompt (the user
-     * bubble), and join everything after it. Falls back to text after the last
-     * known answer boundary when the prompt bubble isn't found.
+     * Returns null until the answer is COMPLETE (the Copy/Retry action row is
+     * present) — this is what prevents grabbing the home-screen greeting or a
+     * half-rendered reply. Once complete, collect non-editable, non-chrome text
+     * nodes in depth-first order, drop everything up to and including the sent
+     * prompt (the user bubble), and join the rest — the assistant's message.
      */
     fun extractLatestAnswer(snapshot: UiSnapshot, prompt: String): String? {
-        val container: UiNode = snapshot.findAll(messageList)
-            .maxByOrNull { it.bounds.area }
-            ?: snapshot.root
-            ?: return null
+        if (!isAnswerComplete(snapshot)) return null
 
-        val candidates = container.findAll(
-            Matchers.hasText and !Matchers.editable and !ignoredText
+        val candidates = snapshot.findAll(
+            Matchers.hasText and !Matchers.editable and !ignoredText,
         )
         if (candidates.isEmpty()) return null
 
         val promptTrimmed = prompt.trim()
         val promptIndex = candidates.indexOfLast { node ->
             val t = node.text?.trim() ?: return@indexOfLast false
-            t == promptTrimmed || (promptTrimmed.length > 20 && t.startsWith(promptTrimmed.take(40)))
+            t == promptTrimmed ||
+                (promptTrimmed.length > 12 && t.startsWith(promptTrimmed.take(24)))
         }
 
-        val answerNodes = if (promptIndex >= 0) {
-            candidates.drop(promptIndex + 1)
-        } else {
-            // Prompt bubble not found (e.g. truncated rendering): take the
-            // trailing run of text nodes as the best available guess.
-            listOfNotNull(candidates.lastOrNull())
-        }
+        val answerNodes = if (promptIndex >= 0) candidates.drop(promptIndex + 1) else candidates
 
         val answer = answerNodes
             .mapNotNull { it.text?.trim() }

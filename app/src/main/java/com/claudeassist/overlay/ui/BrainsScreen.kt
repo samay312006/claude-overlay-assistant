@@ -60,7 +60,13 @@ private fun BrainCard(
             Text(statusText(status))
             Spacer(Modifier.height(10.dp))
             Row {
-                Button(onClick = onConnect) { Text("Connect") }
+                val busy = status is BrainStatus.Busy
+                val label = when (status) {
+                    is BrainStatus.Busy -> "Connecting…"
+                    is BrainStatus.Ready, is BrainStatus.Broken -> "Reconnect"
+                    else -> "Connect"
+                }
+                Button(onClick = onConnect, enabled = !busy) { Text(label) }
                 Spacer(Modifier.padding(4.dp))
                 Button(onClick = onMakeActive, enabled = !isActive) { Text("Use this") }
             }

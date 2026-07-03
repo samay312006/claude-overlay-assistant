@@ -143,9 +143,21 @@ class ClaudeAppDriver(
         }
 
         val input = query.await(ClaudeAppSelectors.inputField, timeoutMs = 8_000)
-            ?: throw DriverException(
+        if (input == null) {
+            val snap = query.snapshot()
+            val nodes = snap.allNodes().toList()
+            val editTexts = nodes.count { it.className.contains("EditText", ignoreCase = true) }
+            val classes = nodes.map { it.className.substringAfterLast('.') }
+                .filter { it.isNotBlank() }.distinct().take(20)
+            android.util.Log.w(
+                "DriverDbg",
+                "inputField miss: nodes=${nodes.size} editTexts=$editTexts classes=$classes; " +
+                    query.debugWindowInfo(),
+            )
+            throw DriverException(
                 "Couldn't find the Claude message field. Run Driver Doctor and update selectors.",
             )
+        }
         if (!exec.typeText(input, prompt)) {
             throw DriverException("Couldn't type into the Claude message field.")
         }
@@ -181,6 +193,18 @@ class ClaudeAppDriver(
         } else {
             exec.home()
         }
+    }
+
+    /**
+     * One-shot read of Claude's on-screen answer (null until complete, or if
+     * Claude isn't the foreground window — e.g. the user switched away, in which
+     * case the caller falls back to the completion notification).
+     */
+    fun readAnswer(prompt: String): String? {
+        val service = serviceProvider() ?: return null
+        val snapshot = UiQuery(service).snapshot()
+        if (snapshot.foregroundPackage != ClaudeAppSelectors.PACKAGE) return null
+        return ClaudeAppSelectors.extractLatestAnswer(snapshot, prompt)
     }
 
     /** Foreground snapshot for Driver Doctor. Null when the service isn't live. */

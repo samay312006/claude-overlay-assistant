@@ -30,26 +30,39 @@ class UiQuery(private val service: AssistAccessibilityService) {
     )
 
     /**
-     * The window to read when driving another app. [rootInActiveWindow] is the
-     * *focused* window — while our ask panel (a focusable overlay) is open, that
-     * is OUR window, not the app we're driving, so reading it (then excluding
-     * our own package) yields an empty tree. Instead prefer the foreground app's
-     * window from the full window list, only falling back to the active window.
+     * The window to read when driving another app. Neither the focused window
+     * nor "the active window" is reliable here: our ask panel (a focusable
+     * overlay) may hold focus, and OTHER overlay apps (e.g. Wispr Flow's
+     * floating dictation button) can be the active window — reading those yields
+     * a tree with no input field. So resolve to the actual foreground app's
+     * window (tracked foregroundPackage) FIRST, then fall back.
      */
     private fun resolveTargetRoot(): AccessibilityNodeInfo? {
         val mine = service.packageName
         val fg = AssistAccessibilityService.foregroundPackage.value
+        val roots = service.windows.mapNotNull { it.root }
 
+        // 1. The real foreground app's window (what we're driving).
+        roots.firstOrNull { fg.isNotEmpty() && it.packageName?.toString() == fg }?.let { return it }
+
+        // 2. The active window, if it's some other real app (not ours).
         service.rootInActiveWindow?.let { active ->
             if (active.packageName?.toString() != mine) return active
         }
 
-        val roots = service.windows.mapNotNull { it.root }
-        roots.firstOrNull { fg.isNotEmpty() && it.packageName?.toString() == fg }?.let { return it }
+        // 3. Last resort: the top-most window that isn't ours.
         return roots.lastOrNull { it.packageName?.toString() != mine }
     }
 
     /** Serializable tree for Driver Doctor. */
+    /** Debug: the packages of all interactive windows + which the resolver picks. */
+    fun debugWindowInfo(): String {
+        val pkgs = service.windows.map { it.root?.packageName?.toString() ?: "?" }
+        val active = service.rootInActiveWindow?.packageName?.toString()
+        val resolved = resolveTargetRoot()?.packageName?.toString()
+        return "fg=${AssistAccessibilityService.foregroundPackage.value} windows=$pkgs active=$active resolved=$resolved"
+    }
+
     fun snapshot(): UiSnapshot = snapshotNow().let { reader ->
         try {
             reader.snapshot

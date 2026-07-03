@@ -63,6 +63,10 @@ class OverlayWindowController(
 
     private val panelWidthDp = 320
 
+    /** While an ask is running, ignore outside taps so the chat doesn't close
+     *  when Claude briefly comes to the foreground. */
+    var suppressOutsideClose = false
+
     fun addBubble() {
         bubble = BubbleView(
             context,
@@ -89,26 +93,11 @@ class OverlayWindowController(
 
     fun isPanelOpen(): Boolean = panel != null
 
-    /** Show the chat panel anchored to the bubble, with a tap-outside scrim. */
+    /** Show the chat panel anchored to the bubble. Tap-outside closes it via
+     *  FLAG_WATCH_OUTSIDE_TOUCH — NOT a full-screen scrim, which would fully
+     *  occlude the app we drive and drop it from the accessibility window list. */
     fun showPanel(): AskPanelView {
         panel?.let { return it }
-
-        // Scrim first (behind panel): catches taps outside the chat to close it.
-        val scrimView = View(context).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            setOnTouchListener { _, event ->
-                if (event.action == MotionEvent.ACTION_DOWN) { hidePanel(); true } else false
-            }
-        }
-        val scrimParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        )
-        wm.addView(scrimView, scrimParams)
-        scrim = scrimView
 
         val view = AskPanelView(
             context,
@@ -118,13 +107,16 @@ class OverlayWindowController(
             onMore = onMore,
             onOpenInClaude = onOpenInClaude,
         )
+        view.onOutsideTouch = { if (!suppressOutsideClose) hidePanel() }
         val params = WindowManager.LayoutParams(
             dp(panelWidthDp),
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType,
-            // Focusable for the keyboard; NOT_TOUCH_MODAL lets outside taps fall
-            // through to the scrim behind.
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            // Focusable for the keyboard; NOT_TOUCH_MODAL + WATCH_OUTSIDE_TOUCH
+            // delivers an ACTION_OUTSIDE on taps outside the panel without an
+            // occluding window.
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START

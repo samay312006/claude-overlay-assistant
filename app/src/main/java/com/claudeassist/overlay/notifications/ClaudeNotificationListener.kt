@@ -46,7 +46,9 @@ class ClaudeNotificationListener : NotificationListenerService() {
         if (text.isEmpty()) return
 
         latestContentIntent = sbn.notification.contentIntent
-        _replies.tryEmit(ClaudeReply(text = text, postedAtMs = sbn.postTime))
+        val reply = ClaudeReply(text = text, postedAtMs = sbn.postTime)
+        latestReply = reply
+        _replies.tryEmit(reply)
     }
 
     companion object {
@@ -64,6 +66,15 @@ class ClaudeNotificationListener : NotificationListenerService() {
 
         @Volatile
         private var latestContentIntent: PendingIntent? = null
+
+        @Volatile
+        private var latestReply: ClaudeReply? = null
+
+        /** The most recent Claude reply posted at/after [sinceMs], if any. Used as
+         *  a fallback when the user backgrounds Claude before the on-screen poll
+         *  captures the answer. */
+        fun latestSince(sinceMs: Long): ClaudeReply? =
+            latestReply?.takeIf { it.postedAtMs >= sinceMs }
 
         fun isEnabled(context: Context): Boolean =
             NotificationManagerCompat.getEnabledListenerPackages(context)

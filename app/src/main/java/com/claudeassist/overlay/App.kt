@@ -7,6 +7,7 @@ import com.claudeassist.overlay.brain.BrainRegistry
 import com.claudeassist.overlay.brain.ClaudeAppBrain
 import com.claudeassist.overlay.brain.FakeBrain
 import com.claudeassist.overlay.brain.PlaceholderBrain
+import com.claudeassist.overlay.brain.RelayBrain
 import com.claudeassist.overlay.brain.drivers.ClaudeAppDriver
 import com.claudeassist.overlay.data.AppDatabase
 import com.claudeassist.overlay.data.HistoryStore
@@ -50,16 +51,13 @@ class App : Application() {
         val claudeBrain = ClaudeAppBrain(
             driver = driver,
             onRun = { runLog -> telemetryStore.record(runLog) },
-            notificationAccessEnabled = {
-                com.claudeassist.overlay.notifications.ClaudeNotificationListener.isEnabled(this)
-            },
         )
         val allBrains: List<Brain> = listOf(
             claudeBrain,
+            RelayBrain(settings),
             FakeBrain(),
             PlaceholderBrain.chatGpt(),
             PlaceholderBrain.anthropicApi(),
-            PlaceholderBrain.pcRelay(),
         )
         brains = BrainRegistry(allBrains, settings)
     }

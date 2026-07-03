@@ -44,11 +44,35 @@ class SecureSettings(context: Context) {
         get() = prefs.getBoolean(KEY_SAVE_THUMBNAILS, false)
         set(value) = prefs.edit { putBoolean(KEY_SAVE_THUMBNAILS, value) }
 
+    // --- PC relay (server-hub over Tailscale) ---
+
+    /** Tailscale hostname or 100.x IP of the PC running server-hub. */
+    var relayHost: String
+        get() = prefs.getString(KEY_RELAY_HOST, "") ?: ""
+        set(value) = prefs.edit { putString(KEY_RELAY_HOST, value.trim()) }
+
+    var relayPort: Int
+        get() = prefs.getInt(KEY_RELAY_PORT, 8088)
+        set(value) = prefs.edit { putInt(KEY_RELAY_PORT, value) }
+
+    /** server-hub HUB_PASSWORD (owner). */
+    var relayPassword: String
+        get() = prefs.getString(KEY_RELAY_PASSWORD, "") ?: ""
+        set(value) = prefs.edit { putString(KEY_RELAY_PASSWORD, value) }
+
+    var relayModel: String
+        get() = prefs.getString(KEY_RELAY_MODEL, "sonnet") ?: "sonnet"
+        set(value) = prefs.edit { putString(KEY_RELAY_MODEL, value) }
+
     companion object {
         const val DEFAULT_BRAIN_ID = "claude-app"
         private const val KEY_ONBOARDING_DONE = "onboarding_done"
         private const val KEY_ACTIVE_BRAIN = "active_brain_id"
         private const val KEY_ATTACH_SCREENSHOT = "attach_screenshot"
         private const val KEY_SAVE_THUMBNAILS = "save_thumbnails"
+        private const val KEY_RELAY_HOST = "relay_host"
+        private const val KEY_RELAY_PORT = "relay_port"
+        private const val KEY_RELAY_PASSWORD = "relay_password"
+        private const val KEY_RELAY_MODEL = "relay_model"
     }
 }

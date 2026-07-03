@@ -1,6 +1,7 @@
 package com.claudeassist.overlay.core
 
 import com.claudeassist.overlay.core.driver.ClaudeAppSelectors
+import com.claudeassist.overlay.core.uitree.UiNode
 import com.claudeassist.overlay.core.uitree.UiSnapshot
 import com.claudeassist.overlay.core.uitree.findFirst
 import kotlinx.serialization.json.Json
@@ -22,16 +23,18 @@ class ClaudeAppSelectorsTest {
 
     @Test
     fun findsInputField() {
+        // Claude's Compose field is an EditText that does NOT set isEditable, so
+        // the selector must match on class name.
         val input = chat.findFirst(ClaudeAppSelectors.inputField)
         assertNotNull(input)
-        assertTrue(input.editable)
+        assertTrue(input.className.contains("EditText"))
     }
 
     @Test
     fun findsSendButton() {
         val send = chat.findFirst(ClaudeAppSelectors.sendButton)
         assertNotNull(send)
-        assertEquals("Send message", send.contentDescription)
+        assertEquals("Send", send.contentDescription)
     }
 
     @Test
@@ -50,5 +53,23 @@ class ClaudeAppSelectorsTest {
     @Test
     fun noErrorInHealthyChat() {
         assertNull(ClaudeAppSelectors.findError(chat))
+    }
+
+    @Test
+    fun noAnswerFromHomeScreenGreeting() {
+        // Regression: Claude's home screen ("Back at it, <name>") has no Copy/Retry
+        // action row, so it must NOT be returned as an answer.
+        val home = UiSnapshot(
+            foregroundPackage = "com.anthropic.claude",
+            root = UiNode(
+                id = 0,
+                className = "android.widget.FrameLayout",
+                children = listOf(
+                    UiNode(id = 1, className = "android.widget.TextView", text = "Back at it, SAMMY BOI"),
+                    UiNode(id = 2, className = "android.widget.EditText", text = ""),
+                ),
+            ),
+        )
+        assertNull(ClaudeAppSelectors.extractLatestAnswer(home, prompt = "what's on screen"))
     }
 }

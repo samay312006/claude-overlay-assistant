@@ -54,6 +54,8 @@ class OverlayService : Service() {
             onNewChat = ::onNewChat,
             onMore = ::onMore,
             onOpenInClaude = {
+                // Retract the chat so Claude is actually visible.
+                controller.hidePanel()
                 com.claudeassist.overlay.notifications.ClaudeNotificationListener.openLatest(this)
             },
         )
@@ -109,6 +111,7 @@ class OverlayService : Service() {
             listOf(
                 MenuItem("💬", "Open Claude") {
                     controller.hideMenu()
+                    controller.hidePanel()
                     com.claudeassist.overlay.notifications.ClaudeNotificationListener.openLatest(this)
                 },
                 MenuItem("◯", "Circle search", enabled = false) {},
@@ -142,26 +145,31 @@ class OverlayService : Service() {
 
         val imageForAsk = if (firstUserMessage) sessionImage else null
         askJob?.cancel()
+        controller.suppressOutsideClose = true // keep chat open while Claude is driven
         askJob = scope.launch {
-            brain.ask(imageForAsk, prompt).collect { event ->
-                when (event) {
-                    is BrainEvent.Delta -> Unit // keep the typing indicator; no status spam
-                    is BrainEvent.Done -> {
-                        messages.add(
-                            ChatMessage(
-                                ChatMessage.Role.CLAUDE,
-                                event.fullText,
-                                truncated = event.timedOut,
-                            ),
-                        )
-                        controller.panel()?.render(messages, typing = false)
-                        saveHistory(prompt, event.fullText, brain.id)
-                    }
-                    is BrainEvent.Failure -> {
-                        messages.add(ChatMessage(ChatMessage.Role.CLAUDE, event.reason, error = true))
-                        controller.panel()?.render(messages, typing = false)
+            try {
+                brain.ask(imageForAsk, prompt).collect { event ->
+                    when (event) {
+                        is BrainEvent.Delta -> Unit // keep the typing indicator; no status spam
+                        is BrainEvent.Done -> {
+                            messages.add(
+                                ChatMessage(
+                                    ChatMessage.Role.CLAUDE,
+                                    event.fullText,
+                                    truncated = event.timedOut,
+                                ),
+                            )
+                            controller.panel()?.render(messages, typing = false)
+                            saveHistory(prompt, event.fullText, brain.id)
+                        }
+                        is BrainEvent.Failure -> {
+                            messages.add(ChatMessage(ChatMessage.Role.CLAUDE, event.reason, error = true))
+                            controller.panel()?.render(messages, typing = false)
+                        }
                     }
                 }
+            } finally {
+                controller.suppressOutsideClose = false
             }
         }
     }
